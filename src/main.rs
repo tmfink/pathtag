@@ -9,7 +9,6 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use tracing::{debug, info, level_filters::LevelFilter, trace, warn};
-use tracing_subscriber;
 use walkdir::WalkDir;
 
 /// Apply EXIF keyword tags based on directory structure
@@ -100,7 +99,7 @@ fn dir_path_to_tags(path: &Path) -> anyhow::Result<BTreeSet<String>> {
         }
         let comp_tags_iter = path_str.split(",").filter_map(|s| {
             let s = s.trim();
-            if s.len() > 0 {
+            if !s.is_empty() {
                 Some(s.to_string())
             } else {
                 None
@@ -230,3 +229,5 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// XXX: add tests
