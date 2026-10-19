@@ -11,6 +11,11 @@ use clap::Parser;
 use tracing::{debug, info, level_filters::LevelFilter, trace, warn};
 use walkdir::WalkDir;
 
+enum ImageCreationResult {
+    NewTagsAdded,
+    ImageNotChanged,
+}
+
 /// Apply EXIF keyword tags based on directory structure
 ///
 /// Makes a copy of the input dir to the output dir with the EXIF tags added
@@ -114,7 +119,9 @@ fn add_image_file_tags(
     original_image_path: &Path,
     new_image_path: &Path,
     new_tags: &BTreeSet<String>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ImageCreationResult> {
+    let mut res = ImageCreationResult::NewTagsAdded;
+
     let new_image_path_dir = new_image_path.parent().with_context(|| {
         format!(
             "Failed to get parent dir for {:?}",
@@ -149,6 +156,7 @@ fn add_image_file_tags(
     })?;
     if !output.status.success() {
         // This can fail if the file does not have EXIF tags, so this is not fatal
+        res = ImageCreationResult::ImageNotChanged;
         warn!(
             "exiv2 command to add tags image {:?}, exited with status {}\
             \nstdout:\
@@ -162,7 +170,7 @@ fn add_image_file_tags(
         );
     }
 
-    Ok(())
+    Ok(res)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -189,10 +197,15 @@ fn main() -> anyhow::Result<()> {
     }
     std::fs::create_dir(&output_dir).context("Failed to create output directory")?;
 
+    let mut changed_files: BTreeSet<String> = Default::default();
+    let mut unchanged_files: BTreeSet<String> = Default::default();
+
     set_current_dir(input_dir).context("Failed to change directory to input directory")?;
     for relative_entry in WalkDir::new(".") {
         let relative_entry = relative_entry.context("Failed to read input file")?;
         debug!("Found entry: {:?}", &relative_entry.path().display());
+
+        // XXX: remove leading "./"
 
         if !relative_entry.file_type().is_file() {
             debug!("skipping; not a file");
@@ -224,7 +237,22 @@ fn main() -> anyhow::Result<()> {
         // XXX: merge tags
         // XXX: ignore non-image file
 
-        add_image_file_tags(relative_entry.path(), &new_file, &tags)?;
+        let file_set = match add_image_file_tags(relative_entry.path(), &new_file, &tags)? {
+            ImageCreationResult::ImageNotChanged => &mut unchanged_files,
+            ImageCreationResult::NewTagsAdded => &mut changed_files,
+        };
+        let path_str = format!("{}", relative_entry.path().display());
+        file_set.insert(path_str);
+    }
+
+    println!("Succeeded adding tags for files:");
+    for file in changed_files {
+        println!("    {}", file);
+    }
+
+    println!("\nFailed to add tags to file:");
+    for file in unchanged_files {
+        println!("    {}", file);
     }
 
     Ok(())
