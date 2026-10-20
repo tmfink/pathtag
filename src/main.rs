@@ -98,17 +98,21 @@ fn dir_path_to_tags(path: &Path) -> anyhow::Result<BTreeSet<String>> {
                     comp
                 )
             })?
+            // always lowercase
             .to_lowercase();
         if path_str == "." {
             continue;
         }
         let comp_tags_iter = path_str.split(",").filter_map(|s| {
+            // avoid leading/trailing spaces
             let s = s.trim();
-            if !s.is_empty() {
-                Some(s.to_string())
-            } else {
-                None
+            // ignore empty tags
+            if s.is_empty() {
+                return None;
             }
+            // avoid duplicate spaces between words of a tag
+            let tag_words: Vec<&str> = s.split_whitespace().collect();
+            Some(tag_words.join(" "))
         });
         tags.extend(comp_tags_iter);
     }
@@ -296,4 +300,34 @@ mod test {
     }
 
     // XXX: add path -> tag tests
+    #[test]
+    fn test_dir_path_to_tags() {
+        fn t(input: &str, expected_output: &[&str]) {
+            let expected_output: BTreeSet<String> = expected_output
+                .iter()
+                .copied()
+                .map(|s| s.to_string())
+                .collect();
+            assert_eq!(
+                dir_path_to_tags(&PathBuf::from(input)).unwrap(),
+                expected_output
+            );
+        }
+        t("", &[]);
+        t("foo", &["foo"]);
+        t("zzz, aaa", &["aaa", "zzz"]);
+        t("zzz,aaa", &["aaa", "zzz"]);
+        t("zzz ,aaa", &["aaa", "zzz"]);
+        t("zzz ,  aaa", &["aaa", "zzz"]);
+        t(
+            "tag1-word1 tag1-word2,tag2",
+            &["tag1-word1 tag1-word2", "tag2"],
+        );
+        t("foo/bar", &["bar", "foo"]);
+        t("foo/bar/baz", &["bar", "baz", "foo"]);
+        t("foo,stuff/bar/baz", &["bar", "baz", "foo", "stuff"]);
+        t(",,, ,   , ,,,,   ,, hi,, ,, ,, ", &["hi"]);
+        t("ALL CAPS", &["all caps"]);
+        t("  Too    Many      Spaces ", &["too many spaces"]);
+    }
 }
