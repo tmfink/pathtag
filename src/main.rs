@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     env::set_current_dir,
     io::BufRead,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
 };
 
@@ -173,6 +173,23 @@ fn add_image_file_tags(
     Ok(res)
 }
 
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut new_path = PathBuf::new();
+
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                new_path.pop();
+            }
+            _ => {
+                new_path.push(comp);
+            }
+        }
+    }
+    new_path
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     set_logging(args.verbose);
@@ -205,27 +222,28 @@ fn main() -> anyhow::Result<()> {
         let relative_entry = relative_entry.context("Failed to read input file")?;
         debug!("Found entry: {:?}", &relative_entry.path().display());
 
-        // XXX: remove leading "./"
-
         if !relative_entry.file_type().is_file() {
             debug!("skipping; not a file");
             continue;
         }
 
+        let relative_path = normalize_path(relative_entry.path());
+        drop(relative_entry);
+
         let new_file = {
             let mut new_file = output_dir.clone();
-            new_file.push(relative_entry.path());
+            new_file.push(&relative_path);
             new_file
         };
         info!(
             "Copying {} to {}",
-            relative_entry.path().canonicalize().unwrap().display(),
+            relative_path.canonicalize().unwrap().display(),
             new_file.display()
         );
-        let parent_dir = relative_entry.path().parent().with_context(|| {
+        let parent_dir = relative_path.parent().with_context(|| {
             format!(
                 "No parent dir found for file {}",
-                relative_entry.path().canonicalize().unwrap().display()
+                relative_path.canonicalize().unwrap().display()
             )
         })?;
         let tags = dir_path_to_tags(parent_dir).with_context(|| {
@@ -237,25 +255,45 @@ fn main() -> anyhow::Result<()> {
         // XXX: merge tags
         // XXX: ignore non-image file
 
-        let file_set = match add_image_file_tags(relative_entry.path(), &new_file, &tags)? {
+        let file_set = match add_image_file_tags(&relative_path, &new_file, &tags)? {
             ImageCreationResult::ImageNotChanged => &mut unchanged_files,
             ImageCreationResult::NewTagsAdded => &mut changed_files,
         };
-        let path_str = format!("{}", relative_entry.path().display());
+        let path_str = format!("{}", relative_path.display());
         file_set.insert(path_str);
     }
 
     println!("Succeeded adding tags for files:");
     for file in changed_files {
-        println!("    {}", file);
+        println!("    {:?}", file);
     }
 
     println!("\nFailed to add tags to file:");
     for file in unchanged_files {
-        println!("    {}", file);
+        println!("    {:?}", file);
     }
 
     Ok(())
 }
 
-// XXX: add tests
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_normalize_path() {
+        fn t(input: &str, expected_output: &str) {
+            assert_eq!(
+                normalize_path(&PathBuf::from(input)).to_string_lossy(),
+                expected_output
+            );
+        }
+        t("./foo", "foo");
+        t("foo", "foo");
+        t("/a/b/c", "/a/b/c");
+        t(".bar/././foo", ".bar/foo");
+        t(".bar/../foo", "foo");
+    }
+
+    // XXX: add path -> tag tests
+}
