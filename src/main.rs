@@ -1,18 +1,17 @@
 use std::{
     collections::BTreeSet,
     env::set_current_dir,
-    io::BufRead,
     path::{Component, Path, PathBuf},
-    process::Command,
 };
 
 use anyhow::Context;
 use clap::Parser;
 use tracing::{debug, info, level_filters::LevelFilter, trace, warn};
 use walkdir::WalkDir;
+const XMP_TAGSLIST: &str = "Xmp.digiKam.TagsList";
 
 enum ImageCreationResult {
-    NewTagsAdded,
+    MetadataAdded,
     ImageNotChanged,
 }
 
@@ -70,21 +69,6 @@ fn sanity_check_inout_paths(input_dir: &Path, output_dir: &Path) -> anyhow::Resu
     Ok(())
 }
 
-fn cmd_output_to_indented(output: &[u8]) -> String {
-    let mut output_indented = String::with_capacity(output.len());
-    for line in output.lines() {
-        let line = match line {
-            Err(err) => {
-                warn!(?err, "Failed to convert output to UTF-8");
-                break;
-            }
-            Ok(line) => line,
-        };
-        output_indented.push_str(&format!(" > {}\n", line));
-    }
-    output_indented
-}
-
 fn dir_path_to_tags(path: &Path) -> anyhow::Result<BTreeSet<String>> {
     let mut tags = BTreeSet::new();
     for comp in path.components() {
@@ -124,8 +108,6 @@ fn add_image_file_tags(
     new_image_path: &Path,
     new_tags: &BTreeSet<String>,
 ) -> anyhow::Result<ImageCreationResult> {
-    let mut res = ImageCreationResult::NewTagsAdded;
-
     let new_image_path_dir = new_image_path.parent().with_context(|| {
         format!(
             "Failed to get parent dir for {:?}",
@@ -146,35 +128,26 @@ fn add_image_file_tags(
         )
     })?;
 
-    // exiv2 -M'set Xmp.digiKam.TagsList XmpSeq tag1' -M'set Xmp.digiKam.TagsList XmpSeq tag2' output.jpg
-    let mut cmd = Command::new("exiv2");
-    for tag in new_tags {
-        cmd.arg(format!("-Mset Xmp.digiKam.TagsList XmpSeq {tag}"));
-    }
-    cmd.arg(new_image_path);
-    let output = cmd.output().with_context(|| {
-        format!(
-            "failed to execute exiv2 to add tags image {:?}",
-            new_image_path.display()
-        )
-    })?;
-    if !output.status.success() {
-        // This can fail if the file does not have EXIF tags, so this is not fatal
-        res = ImageCreationResult::ImageNotChanged;
-        warn!(
-            "exiv2 command to add tags image {:?}, exited with status {}\
-            \nstdout:\
-            \n{}\
-            \nstderr:\
-            \n{}",
-            new_image_path.display(),
-            output.status,
-            cmd_output_to_indented(&output.stdout),
-            cmd_output_to_indented(&output.stderr),
-        );
+    let meta = rexiv2::Metadata::new_from_path(original_image_path)?;
+    let mut final_tags_list = new_tags.clone();
+    let mut existing_tags_list = meta
+        .get_tag_multiple_strings(XMP_TAGSLIST)
+        .unwrap_or_default();
+    trace!("existing tags: {existing_tags_list:?}");
+    final_tags_list.extend(existing_tags_list.drain(0..));
+    let final_tags_str_vec: Vec<&str> = final_tags_list.iter().map(|s| s.as_str()).collect();
+
+    if let Err(err) = meta.set_tag_multiple_strings(XMP_TAGSLIST, &final_tags_str_vec) {
+        warn!("Failed to add tags to image metadata: {}", err);
+        return Ok(ImageCreationResult::ImageNotChanged);
     }
 
-    Ok(res)
+    if let Err(err) = meta.save_to_file(new_image_path) {
+        warn!("Failed to save metadata to file: {}", err);
+        return Ok(ImageCreationResult::ImageNotChanged);
+    }
+
+    Ok(ImageCreationResult::MetadataAdded)
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -195,6 +168,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 fn main() -> anyhow::Result<()> {
+    rexiv2::initialize().expect("Unable to initialize rexiv2");
+
     let args = Args::parse();
     set_logging(args.verbose);
     info!("Args: {args:?}");
@@ -231,10 +206,12 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
+        // XXX: ignore non-image file?
+
         let relative_path = normalize_path(relative_entry.path());
         drop(relative_entry);
 
-        let new_file = {
+        let new_file_path = {
             let mut new_file = output_dir.clone();
             new_file.push(&relative_path);
             new_file
@@ -242,7 +219,7 @@ fn main() -> anyhow::Result<()> {
         info!(
             "Copying {} to {}",
             relative_path.canonicalize().unwrap().display(),
-            new_file.display()
+            new_file_path.display()
         );
         let parent_dir = relative_path.parent().with_context(|| {
             format!(
@@ -250,31 +227,31 @@ fn main() -> anyhow::Result<()> {
                 relative_path.canonicalize().unwrap().display()
             )
         })?;
-        let tags = dir_path_to_tags(parent_dir).with_context(|| {
+        let new_tags = dir_path_to_tags(parent_dir).with_context(|| {
             format!("Failed to get tags for directory {}", parent_dir.display())
         })?;
-        trace!("tags: {tags:?}");
+        trace!("new tags: {new_tags:?}");
 
-        // XXX: get image current tags
-        // XXX: merge tags
-        // XXX: ignore non-image file
-
-        let file_set = match add_image_file_tags(&relative_path, &new_file, &tags)? {
+        let file_set = match add_image_file_tags(&relative_path, &new_file_path, &new_tags)? {
             ImageCreationResult::ImageNotChanged => &mut unchanged_files,
-            ImageCreationResult::NewTagsAdded => &mut changed_files,
+            ImageCreationResult::MetadataAdded => &mut changed_files,
         };
         let path_str = format!("{}", relative_path.display());
         file_set.insert(path_str);
     }
 
-    println!("Succeeded adding tags for files:");
-    for file in changed_files {
-        println!("    {:?}", file);
+    if !changed_files.is_empty() {
+        println!("Succeeded adding tags for files:");
+        for file in changed_files {
+            println!("    {:?}", file);
+        }
     }
 
-    println!("\nFailed to add tags to file:");
-    for file in unchanged_files {
-        println!("    {:?}", file);
+    if !unchanged_files.is_empty() {
+        println!("\nFailed to add tags to file:");
+        for file in unchanged_files {
+            println!("    {:?}", file);
+        }
     }
 
     Ok(())
