@@ -6,14 +6,16 @@
 
 set -eu
 
-if [ $# -ne 2 ]; then
-    echo "Usage: INPUT_BIN OUTPUT_APP"
+if [ $# -ne 3 ]; then
+    echo "Usage: INPUT_BIN OUTPUT_APP OUTPUT_ZIP"
     exit 1
 fi
 
 BIN="$1"
 shift
 APP="$1"
+shift
+OUTPUT_ZIP="$1"
 shift
 
 BIN_BASENAME="${BIN##*/}"
@@ -56,5 +58,8 @@ dylibbundler \
     -b \
     -x "${APP}/Contents/MacOS/${BIN_BASENAME}" \
     -d "${APP}/Contents/Frameworks/" \
-    -p "@executable_path/../Frameworks/" \
-    -s "$(brew --prefix)/lib"
+    -p "@executable_path/../Frameworks/"
+
+otool -L "${APP}/Contents/MacOS/${BIN_BASENAME}"
+
+ditto -c -k --sequesterRsrc --keepParent "${APP}" "${OUTPUT_ZIP}"
