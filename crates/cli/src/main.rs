@@ -14,6 +14,11 @@ enum ImageCreationResult {
     ImageNotChanged,
 }
 
+struct ChangeInfo {
+    changed_files: BTreeSet<String>,
+    unchanged_files: BTreeSet<String>,
+}
+
 /// Apply EXIF keyword tags based on directory structure
 ///
 /// Makes a copy of the input dir to the output dir with the EXIF tags added
@@ -149,35 +154,25 @@ fn add_image_file_tags(
     Ok(ImageCreationResult::MetadataAdded)
 }
 
-fn main() -> anyhow::Result<()> {
-    rexiv2::initialize().expect("Unable to initialize rexiv2");
-
-    let args = Args::parse();
-    set_logging(args.verbose);
-    info!("Args: {args:?}");
-
-    // Sanity check neither input nor output dir are subdirs of each other
-    let input_abs_dir = args
-        .input_dir
+fn tag_dir_images(
+    input_dir: &Path,
+    output_dir: &Path,
+    force_output_dir: bool,
+) -> Result<ChangeInfo, anyhow::Error> {
+    let input_abs_dir = input_dir
         .canonicalize()
         .context("Unable to canonicalize input dir")?;
-    let output_abs_dir = args
-        .output_dir
+    let output_abs_dir = output_dir
         .canonicalize()
         .context("Unable to canonicalize input dir")?;
-    drop(args.input_dir);
-    drop(args.output_dir);
 
     sanity_check_inout_paths(&input_abs_dir, &output_abs_dir)?;
-
-    if args.force {
+    if force_output_dir {
         std::fs::remove_dir_all(&output_abs_dir).context("Failed to remove output dir")?;
     }
     std::fs::create_dir(&output_abs_dir).context("Failed to create output directory")?;
-
     let mut changed_files: BTreeSet<String> = Default::default();
     let mut unchanged_files: BTreeSet<String> = Default::default();
-
     for input_abs_entry in WalkDir::new(&input_abs_dir) {
         let input_abs_entry = input_abs_entry.context("Failed to read input file")?;
         debug!("Found entry: {:?}", &input_abs_entry.path().display());
@@ -226,17 +221,31 @@ fn main() -> anyhow::Result<()> {
         };
         file_set.insert(path_str);
     }
+    Ok(ChangeInfo {
+        changed_files,
+        unchanged_files,
+    })
+}
 
-    if !changed_files.is_empty() {
+fn main() -> anyhow::Result<()> {
+    rexiv2::initialize().expect("Unable to initialize rexiv2");
+
+    let args = Args::parse();
+    set_logging(args.verbose);
+    info!("Args: {args:?}");
+
+    let change_info = tag_dir_images(&args.input_dir, &args.output_dir, args.force)?;
+
+    if !change_info.changed_files.is_empty() {
         println!("Succeeded adding tags for files:");
-        for file in changed_files {
+        for file in change_info.changed_files {
             println!("    {:?}", file);
         }
     }
 
-    if !unchanged_files.is_empty() {
+    if !change_info.unchanged_files.is_empty() {
         println!("\nFailed to add tags to file:");
-        for file in unchanged_files {
+        for file in change_info.unchanged_files {
             println!("    {:?}", file);
         }
     }
