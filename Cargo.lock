@@ -211,6 +211,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pathtag-core",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "pathtag-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "rexiv2",
  "tracing",
  "tracing-subscriber",
