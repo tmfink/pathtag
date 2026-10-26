@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{collections::BTreeSet, io::ErrorKind::AlreadyExists, path::Path};
 
 use anyhow::Context;
 use tracing::{debug, info, trace, warn};
@@ -122,6 +122,13 @@ pub fn tag_dir_images(
     let input_abs_dir = input_dir
         .canonicalize()
         .with_context(|| format!("Unable to canonicalize input dir {:?}", input_dir.display()))?;
+
+    match std::fs::create_dir(output_dir) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == AlreadyExists => Ok(()),
+        Err(err) => Err(err),
+    }
+    .context("Failed to create output directory")?;
     let output_abs_dir = output_dir.canonicalize().with_context(|| {
         format!(
             "Unable to canonicalize output dir {:?}",
@@ -133,7 +140,6 @@ pub fn tag_dir_images(
     if force_output_dir {
         std::fs::remove_dir_all(&output_abs_dir).context("Failed to remove output dir")?;
     }
-    std::fs::create_dir(&output_abs_dir).context("Failed to create output directory")?;
     let mut changed_files: BTreeSet<String> = Default::default();
     let mut unchanged_files: BTreeSet<String> = Default::default();
     for input_abs_entry in WalkDir::new(&input_abs_dir) {
