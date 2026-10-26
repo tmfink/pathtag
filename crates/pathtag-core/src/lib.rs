@@ -121,10 +121,13 @@ pub fn tag_dir_images(
 ) -> Result<ChangeInfo, anyhow::Error> {
     let input_abs_dir = input_dir
         .canonicalize()
-        .context("Unable to canonicalize input dir")?;
-    let output_abs_dir = output_dir
-        .canonicalize()
-        .context("Unable to canonicalize input dir")?;
+        .with_context(|| format!("Unable to canonicalize input dir {:?}", input_dir.display()))?;
+    let output_abs_dir = output_dir.canonicalize().with_context(|| {
+        format!(
+            "Unable to canonicalize output dir {:?}",
+            output_dir.display()
+        )
+    })?;
 
     sanity_check_inout_paths(&input_abs_dir, &output_abs_dir)?;
     if force_output_dir {
