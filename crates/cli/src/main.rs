@@ -48,16 +48,16 @@ fn main() -> anyhow::Result<()> {
 
     let change_info = pathtag_core::tag_dir_images(&args.input_dir, &args.output_dir, args.force)?;
 
-    if !change_info.changed_files.is_empty() {
+    if !change_info.success_files.is_empty() {
         println!("Succeeded adding tags for files:");
-        for file in change_info.changed_files {
+        for file in change_info.success_files {
             println!("    {:?}", file);
         }
     }
 
-    if !change_info.unchanged_files.is_empty() {
+    if !change_info.error_files.is_empty() {
         println!("\nFailed to add tags to file:");
-        for file in change_info.unchanged_files {
+        for file in change_info.error_files {
             println!("    {:?}", file);
         }
     }

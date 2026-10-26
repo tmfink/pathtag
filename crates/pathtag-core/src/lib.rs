@@ -11,8 +11,8 @@ enum ImageCreationResult {
 }
 
 pub struct ChangeInfo {
-    pub changed_files: BTreeSet<String>,
-    pub unchanged_files: BTreeSet<String>,
+    pub success_files: BTreeSet<String>,
+    pub error_files: BTreeSet<String>,
 }
 
 fn sanity_check_inout_paths(input_dir: &Path, output_dir: &Path) -> anyhow::Result<()> {
@@ -191,8 +191,8 @@ pub fn tag_dir_images(
         file_set.insert(path_str);
     }
     Ok(ChangeInfo {
-        changed_files,
-        unchanged_files,
+        success_files: changed_files,
+        error_files: unchanged_files,
     })
 }
 

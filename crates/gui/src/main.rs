@@ -178,8 +178,8 @@ impl RunResult {
 
                     self.logs.push(format!(
                         "Completed successfully: {} changed, {} unchanged.",
-                        changes.changed_files.len(),
-                        changes.unchanged_files.len(),
+                        changes.success_files.len(),
+                        changes.error_files.len(),
                     ));
 
                     self.changes = Some(changes);
@@ -424,8 +424,8 @@ impl eframe::App for ImageTaggerApp {
             if let Some(result) = &mut self.result {
                 egui::Window::new("Image Tagging Results")
                     .open(&mut self.results_open)
-                    .default_size([820.0, 600.0])
-                    .min_size([480.0, 300.0])
+                    .default_size([820.0, 800.0])
+                    .min_size([480.0, 400.0])
                     .resizable(true)
                     .show(ctx, |ui| {
                         ui.horizontal(|ui| match result.status {
@@ -454,28 +454,25 @@ impl eframe::App for ImageTaggerApp {
                         }
 
                         if let Some(changes) = &result.changes {
-                            ui.label(format!("Changed files: {}", changes.changed_files.len(),));
+                            if !changes.success_files.is_empty() {
+                                egui::CollapsingHeader::new(format!(
+                                    "Success files ({})",
+                                    changes.success_files.len(),
+                                ))
+                                .show(ui, |ui| {
+                                    Self::file_list(ui, &changes.success_files);
+                                });
+                            }
 
-                            ui.label(format!(
-                                "Unchanged files: {}",
-                                changes.unchanged_files.len(),
-                            ));
-
-                            egui::CollapsingHeader::new(format!(
-                                "Changed files ({})",
-                                changes.changed_files.len(),
-                            ))
-                            .show(ui, |ui| {
-                                Self::file_list(ui, &changes.changed_files);
-                            });
-
-                            egui::CollapsingHeader::new(format!(
-                                "Unchanged files ({})",
-                                changes.unchanged_files.len(),
-                            ))
-                            .show(ui, |ui| {
-                                Self::file_list(ui, &changes.unchanged_files);
-                            });
+                            if !changes.error_files.is_empty() {
+                                egui::CollapsingHeader::new(format!(
+                                    "Error files ({})",
+                                    changes.error_files.len(),
+                                ))
+                                .show(ui, |ui| {
+                                    Self::file_list(ui, &changes.error_files);
+                                });
+                            }
                         }
 
                         ui.separator();
