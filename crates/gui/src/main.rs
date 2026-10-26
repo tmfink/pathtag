@@ -49,6 +49,59 @@ impl<S: Subscriber> Layer<S> for GuiLogLayer {
     }
 }
 
+enum PreflightMessage {
+    Sizes(Result<DiskSpace, String>),
+}
+
+struct DiskSpace {
+    input_dir_bytes: u64,
+    output_dir_bytes: Option<u64>,
+}
+
+impl DiskSpace {
+    fn additional_space(&self) -> u64 {
+        self.input_dir_bytes
+            .saturating_sub(self.output_dir_bytes.unwrap_or_default())
+    }
+}
+
+struct Preflight {
+    input: PathBuf,
+    output: PathBuf,
+    rx: Receiver<PreflightMessage>,
+    sizes: Option<DiskSpace>,
+    error: Option<String>,
+}
+
+fn directory_size(path: &std::path::Path) -> Result<u64, String> {
+    let mut total = 0u64;
+
+    for entry in walkdir::WalkDir::new(path).follow_links(false) {
+        let entry = entry.map_err(|e| e.to_string())?;
+
+        if entry.file_type().is_file() {
+            let metadata = entry.metadata().map_err(|e| e.to_string())?;
+            total = total.saturating_add(metadata.len());
+        }
+    }
+
+    Ok(total)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+
+    let mut value = bytes as f64;
+    let mut unit = 0;
+
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    format!("{value:.2} {}", UNITS[unit])
+}
+
 #[derive(Default)]
 struct FieldVisitor {
     message: String,
@@ -161,8 +214,10 @@ impl RunResult {
 struct ImageTaggerApp {
     input_dir: String,
     output_dir: String,
-    force_output_dir: bool,
     validation_error: Option<String>,
+
+    preflight: Option<Preflight>,
+    preflight_open: bool,
 
     result: Option<RunResult>,
     results_open: bool,
@@ -173,8 +228,9 @@ impl Default for ImageTaggerApp {
         Self {
             input_dir: String::new(),
             output_dir: String::new(),
-            force_output_dir: false,
             validation_error: None,
+            preflight: None,
+            preflight_open: false,
             result: None,
             results_open: false,
         }
@@ -210,7 +266,7 @@ impl ImageTaggerApp {
             .is_some_and(|r| r.status == RunStatus::Running)
     }
 
-    fn start(&mut self, ctx: &egui::Context) {
+    fn begin_preflight(&mut self, ctx: &egui::Context) {
         self.validation_error = None;
 
         let input = PathBuf::from(self.input_dir.trim());
@@ -229,18 +285,68 @@ impl ImageTaggerApp {
         if !input.is_dir() {
             self.validation_error = Some(format!(
                 "Input directory does not exist: {}",
-                input.display(),
+                input.display()
             ));
             return;
         }
 
-        let force = self.force_output_dir;
+        // Avoid accidentally treating the input directory as output.
+        let canonical_input = input.canonicalize().ok();
+        let canonical_output = output.canonicalize().ok();
 
-        // One channel carries both log entries and the final result.
+        if canonical_input.is_some() && canonical_input == canonical_output {
+            self.validation_error = Some("Input and output directories must be different.".into());
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+
+        self.preflight = Some(Preflight {
+            input: input.clone(),
+            output: output.clone(),
+            rx,
+            sizes: None,
+            error: None,
+        });
+
+        self.preflight_open = true;
+
+        let gui_ctx = ctx.clone();
+
+        thread::spawn(move || {
+            let result = (|| {
+                let input_dir_bytes = directory_size(&input)?;
+
+                let output_dir_bytes = if output.exists() {
+                    Some(directory_size(&output)?)
+                } else {
+                    None
+                };
+
+                Ok(DiskSpace {
+                    input_dir_bytes,
+                    output_dir_bytes,
+                })
+            })();
+
+            let _ = tx.send(PreflightMessage::Sizes(result));
+            gui_ctx.request_repaint();
+        });
+    }
+
+    fn launch_worker(&mut self, ctx: &egui::Context) {
+        let Some(preflight) = self.preflight.take() else {
+            return;
+        };
+
+        let input = preflight.input;
+        let output = preflight.output;
+
         let (tx, rx) = mpsc::channel::<WorkerMessage>();
 
         self.result = Some(RunResult::new(rx));
         self.results_open = true;
+        self.preflight_open = false;
 
         let gui_ctx = ctx.clone();
 
@@ -250,19 +356,16 @@ impl ImageTaggerApp {
                 ctx: gui_ctx.clone(),
             };
 
-            // Install a subscriber for this worker thread, without
-            // claiming the process-wide global subscriber.
             let subscriber = tracing_subscriber::registry().with(layer);
 
             let result = tracing::subscriber::with_default(subscriber, || {
                 tracing::info!(
                     input_dir = %input.display(),
                     output_dir = %output.display(),
-                    force_output_dir = force,
                     "Starting image tagging"
                 );
 
-                tag_dir_images(&input, &output, force).map_err(|error| format!("{error:#}"))
+                tag_dir_images(&input, &output, true).map_err(|error| format!("{error:#}"))
             });
 
             let _ = tx.send(WorkerMessage::Finished(result));
@@ -291,13 +394,6 @@ impl eframe::App for ImageTaggerApp {
 
             Self::directory_input(ui, "Output directory:", &mut self.output_dir);
 
-            ui.add_space(8.0);
-
-            ui.checkbox(
-                &mut self.force_output_dir,
-                "Allow overwriting the output directory",
-            );
-
             ui.add_space(12.0);
 
             ui.horizontal(|ui| {
@@ -305,7 +401,7 @@ impl eframe::App for ImageTaggerApp {
                     .add_enabled(!self.is_running(), egui::Button::new("Go"))
                     .clicked()
                 {
-                    self.start(ctx);
+                    self.begin_preflight(ctx);
                 }
 
                 if self.result.is_some() && ui.button("Show results").clicked() {
@@ -414,7 +510,20 @@ impl eframe::App for ImageTaggerApp {
             }
         }
 
-        // Continue refreshing while work is in progress.
+        // Show the preflight confirmation dialog, if open.
+        self.show_preflight(ctx);
+
+        // Keep the UI responsive while directory sizes are calculated.
+        if self.preflight_open
+            && self
+                .preflight
+                .as_ref()
+                .is_some_and(|p| p.sizes.is_none() && p.error.is_none())
+        {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+
+        // Continue refreshing while the tagging operation is running.
         if self.is_running() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -430,6 +539,135 @@ impl ImageTaggerApp {
                     ui.label(egui::RichText::new(file).monospace());
                 }
             });
+    }
+
+    fn show_preflight(&mut self, ctx: &egui::Context) {
+        // Collect completed size calculations without blocking the UI.
+        if let Some(preflight) = &mut self.preflight {
+            loop {
+                match preflight.rx.try_recv() {
+                    Ok(PreflightMessage::Sizes(Ok(sizes))) => {
+                        preflight.sizes = Some(sizes);
+                    }
+                    Ok(PreflightMessage::Sizes(Err(error))) => {
+                        preflight.error = Some(error);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        if preflight.sizes.is_none() && preflight.error.is_none() {
+                            preflight.error = Some("Directory scan stopped unexpectedly.".into());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !self.preflight_open {
+            return;
+        }
+
+        let mut confirm = false;
+        let mut cancel = false;
+
+        if let Some(preflight) = &self.preflight {
+            let output_exists = preflight.output.exists();
+            let scanning = preflight.sizes.is_none() && preflight.error.is_none();
+
+            egui::Window::new("Confirm image tagging")
+                .collapsible(false)
+                .resizable(false)
+                .default_width(520.0)
+                .show(ctx, |ui| {
+                    ui.label("Review the operation before continuing.");
+                    ui.add_space(8.0);
+
+                    ui.label("Input directory:");
+                    ui.monospace(preflight.input.display().to_string());
+
+                    ui.label("Output directory:");
+                    ui.monospace(preflight.output.display().to_string());
+
+                    ui.add_space(12.0);
+
+                    if output_exists {
+                        ui.colored_label(
+                            egui::Color32::RED,
+                            egui::RichText::new(
+                                "WARNING: \
+                             Output dir already exists, all existing contents will be deleted.",
+                            )
+                            .strong(),
+                        );
+                    } else {
+                        ui.label("The output path does not currently exist.");
+                    }
+
+                    ui.separator();
+                    ui.heading("Disk space estimate");
+
+                    if scanning {
+                        ui.spinner();
+                        ui.label("Calculating directory sizes...");
+                    }
+
+                    if let Some(error) = &preflight.error {
+                        ui.colored_label(
+                            egui::Color32::RED,
+                            format!("Could not calculate directory sizes: {error}"),
+                        );
+                    }
+
+                    if let Some(disk_space) = &preflight.sizes {
+                        ui.label(format!(
+                            "Input directory size: {}",
+                            format_bytes(disk_space.input_dir_bytes),
+                        ));
+
+                        if let Some(output_dir_bytes) = disk_space.output_dir_bytes {
+                            ui.label(format!(
+                                "Existing output size: {}",
+                                format_bytes(output_dir_bytes),
+                            ));
+                        }
+
+                        ui.label(format!(
+                            "Estimated additional space required: approximately {}",
+                            format_bytes(disk_space.additional_space()),
+                        ));
+
+                        ui.small(
+                            "Estimate based on the total size of input files. \
+                         Actual space use may differ.",
+                        );
+                    }
+
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Back").clicked() {
+                            cancel = true;
+                        }
+
+                        let can_confirm = !scanning && preflight.error.is_none();
+
+                        if ui
+                            .add_enabled(can_confirm, egui::Button::new("Continue"))
+                            .clicked()
+                        {
+                            confirm = true;
+                        }
+                    });
+                });
+        }
+
+        if cancel {
+            self.preflight_open = false;
+            self.preflight = None;
+        }
+
+        if confirm {
+            self.launch_worker(ctx);
+        }
     }
 }
 

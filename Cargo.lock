@@ -2484,6 +2484,7 @@ dependencies = [
  "rfd",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]
