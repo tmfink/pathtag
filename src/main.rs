@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeSet,
-    env::set_current_dir,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use anyhow::Context;
@@ -84,7 +83,7 @@ fn dir_path_to_tags(path: &Path) -> anyhow::Result<BTreeSet<String>> {
             })?
             // always lowercase
             .to_lowercase();
-        if path_str == "." {
+        if path_str == "." || path_str == "/" {
             continue;
         }
         let comp_tags_iter = path_str.split(",").filter_map(|s| {
@@ -150,23 +149,6 @@ fn add_image_file_tags(
     Ok(ImageCreationResult::MetadataAdded)
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut new_path = PathBuf::new();
-
-    for comp in path.components() {
-        match comp {
-            Component::CurDir => continue,
-            Component::ParentDir => {
-                new_path.pop();
-            }
-            _ => {
-                new_path.push(comp);
-            }
-        }
-    }
-    new_path
-}
-
 fn main() -> anyhow::Result<()> {
     rexiv2::initialize().expect("Unable to initialize rexiv2");
 
@@ -175,68 +157,73 @@ fn main() -> anyhow::Result<()> {
     info!("Args: {args:?}");
 
     // Sanity check neither input nor output dir are subdirs of each other
-    let input_dir = args
+    let input_abs_dir = args
         .input_dir
         .canonicalize()
         .context("Unable to canonicalize input dir")?;
-    let output_dir = args
+    let output_abs_dir = args
         .output_dir
         .canonicalize()
         .context("Unable to canonicalize input dir")?;
     drop(args.input_dir);
     drop(args.output_dir);
 
-    sanity_check_inout_paths(&input_dir, &output_dir)?;
+    sanity_check_inout_paths(&input_abs_dir, &output_abs_dir)?;
 
     if args.force {
-        std::fs::remove_dir_all(&output_dir).context("Failed to remove output dir")?;
+        std::fs::remove_dir_all(&output_abs_dir).context("Failed to remove output dir")?;
     }
-    std::fs::create_dir(&output_dir).context("Failed to create output directory")?;
+    std::fs::create_dir(&output_abs_dir).context("Failed to create output directory")?;
 
     let mut changed_files: BTreeSet<String> = Default::default();
     let mut unchanged_files: BTreeSet<String> = Default::default();
 
-    set_current_dir(input_dir).context("Failed to change directory to input directory")?;
-    for relative_entry in WalkDir::new(".") {
-        let relative_entry = relative_entry.context("Failed to read input file")?;
-        debug!("Found entry: {:?}", &relative_entry.path().display());
+    for input_abs_entry in WalkDir::new(&input_abs_dir) {
+        let input_abs_entry = input_abs_entry.context("Failed to read input file")?;
+        debug!("Found entry: {:?}", &input_abs_entry.path().display());
 
-        if !relative_entry.file_type().is_file() {
+        if !input_abs_entry.file_type().is_file() {
             debug!("skipping; not a file");
             continue;
         }
 
         // XXX: ignore non-image file?
 
-        let relative_path = normalize_path(relative_entry.path());
-        drop(relative_entry);
+        let relative_path = input_abs_entry
+            .path()
+            .strip_prefix(&input_abs_dir)
+            .context("Failed to find common path")?;
+        let path_str = format!("{}", relative_path.display());
 
         let new_file_path = {
-            let mut new_file = output_dir.clone();
-            new_file.push(&relative_path);
+            let mut new_file = output_abs_dir.clone();
+            new_file.push(relative_path);
             new_file
         };
         info!(
             "Copying {} to {}",
-            relative_path.canonicalize().unwrap().display(),
+            input_abs_entry.path().display(),
             new_file_path.display()
         );
-        let parent_dir = relative_path.parent().with_context(|| {
+        let new_file_parent_dir = &new_file_path.parent().with_context(|| {
             format!(
                 "No parent dir found for file {}",
                 relative_path.canonicalize().unwrap().display()
             )
         })?;
-        let new_tags = dir_path_to_tags(parent_dir).with_context(|| {
-            format!("Failed to get tags for directory {}", parent_dir.display())
+        let new_tags = dir_path_to_tags(new_file_parent_dir).with_context(|| {
+            format!(
+                "Failed to get tags for directory {}",
+                new_file_parent_dir.display()
+            )
         })?;
         trace!("new tags: {new_tags:?}");
 
-        let file_set = match add_image_file_tags(&relative_path, &new_file_path, &new_tags)? {
+        let file_set = match add_image_file_tags(input_abs_entry.path(), &new_file_path, &new_tags)?
+        {
             ImageCreationResult::ImageNotChanged => &mut unchanged_files,
             ImageCreationResult::MetadataAdded => &mut changed_files,
         };
-        let path_str = format!("{}", relative_path.display());
         file_set.insert(path_str);
     }
 
@@ -261,22 +248,6 @@ fn main() -> anyhow::Result<()> {
 mod test {
     use super::*;
 
-    #[test]
-    fn test_normalize_path() {
-        fn t(input: &str, expected_output: &str) {
-            assert_eq!(
-                normalize_path(&PathBuf::from(input)).to_string_lossy(),
-                expected_output
-            );
-        }
-        t("./foo", "foo");
-        t("foo", "foo");
-        t("/a/b/c", "/a/b/c");
-        t(".bar/././foo", ".bar/foo");
-        t(".bar/../foo", "foo");
-    }
-
-    // XXX: add path -> tag tests
     #[test]
     fn test_dir_path_to_tags() {
         fn t(input: &str, expected_output: &[&str]) {
@@ -306,5 +277,6 @@ mod test {
         t(",,, ,   , ,,,,   ,, hi,, ,, ,, ", &["hi"]);
         t("ALL CAPS", &["all caps"]);
         t("  Too    Many      Spaces ", &["too many spaces"]);
+        t("/ignore/abs/dir/", &["ignore", "abs", "dir"]);
     }
 }
