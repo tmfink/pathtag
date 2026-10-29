@@ -7,6 +7,7 @@ edition = "2024"
 pathtag-core = { path = "../pathtag-core" }
 
 anyhow = { workspace = true }
+clap = { workspace = true }
 eframe = "0.31"
 rfd = "0.15"
 tracing = { workspace = true }

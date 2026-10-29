@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use clap::Parser;
 use eframe::egui;
 use pathtag_core::{ChangeInfo, tag_dir_images};
 use tracing::{Event, Subscriber};
@@ -13,6 +14,25 @@ use tracing_subscriber::{
     layer::{Context, Layer},
     prelude::*,
 };
+
+const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon.png"));
+
+// Args are optional and pre-populate fields if set
+
+/// Apply EXIF keyword tags based on directory structure
+///
+/// Makes a copy of the input dir to the output dir with the EXIF tags added
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Input directory with images
+    #[arg(short, long)]
+    input_dir: Option<PathBuf>,
+
+    /// Output directory for images with tags added
+    #[arg(short, long)]
+    output_dir: Option<PathBuf>,
+}
 
 // ------------------------------------------------------------
 // Logging
@@ -211,7 +231,7 @@ impl RunResult {
 // Application
 // ------------------------------------------------------------
 
-struct ImageTaggerApp {
+struct PathTagApp {
     input_dir: String,
     output_dir: String,
     validation_error: Option<String>,
@@ -223,7 +243,7 @@ struct ImageTaggerApp {
     results_open: bool,
 }
 
-impl Default for ImageTaggerApp {
+impl Default for PathTagApp {
     fn default() -> Self {
         Self {
             input_dir: String::new(),
@@ -237,7 +257,7 @@ impl Default for ImageTaggerApp {
     }
 }
 
-impl ImageTaggerApp {
+impl PathTagApp {
     fn browse_directory(path: &mut String) {
         if let Some(selected) = rfd::FileDialog::new().pick_folder() {
             *path = selected.display().to_string();
@@ -378,14 +398,14 @@ impl ImageTaggerApp {
 // Main UI
 // ------------------------------------------------------------
 
-impl eframe::App for ImageTaggerApp {
+impl eframe::App for PathTagApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(result) = &mut self.result {
             result.poll(ctx);
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Image Tagger");
+            ui.heading("PathTag");
             ui.label("Add metadata tags to images in a directory.");
 
             ui.add_space(12.0);
@@ -527,7 +547,7 @@ impl eframe::App for ImageTaggerApp {
     }
 }
 
-impl ImageTaggerApp {
+impl PathTagApp {
     fn file_list(ui: &mut egui::Ui, files: &BTreeSet<String>) {
         egui::ScrollArea::vertical()
             .max_height(180.0)
@@ -669,16 +689,47 @@ impl ImageTaggerApp {
 }
 
 fn main() -> eframe::Result {
+    let args = Args::parse();
+
+    let input_dir = args
+        .input_dir
+        .map(|p| {
+            p.canonicalize()
+                .expect("Failed to canonicalize input_dir")
+                .into_string()
+                .expect("Failed to convert input_dir to UTF-8")
+        })
+        .unwrap_or_default();
+    let output_dir = args
+        .output_dir
+        .map(|p| {
+            p.canonicalize()
+                .expect("Failed to canonicalize output_dir")
+                .into_string()
+                .expect("Failed to convert output_dir to UTF-8")
+        })
+        .unwrap_or_default();
+
+    let icon =
+        eframe::icon_data::from_png_bytes(ICON_BYTES).expect("Failed to parse runtime icon PNG");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([760.0, 280.0])
-            .with_min_inner_size([580.0, 220.0]),
+            .with_inner_size([760.0, 500.0])
+            .with_min_inner_size([580.0, 220.0])
+            .with_icon(icon),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Image Tagger",
+        "PathTag",
         options,
-        Box::new(|_cc| Ok(Box::new(ImageTaggerApp::default()))),
+        Box::new(|_cc| {
+            Ok(Box::new(PathTagApp {
+                input_dir,
+                output_dir,
+                ..PathTagApp::default()
+            }))
+        }),
     )
 }
