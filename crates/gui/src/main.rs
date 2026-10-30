@@ -231,6 +231,7 @@ impl RunResult {
 // Application
 // ------------------------------------------------------------
 
+#[derive(Default)]
 struct PathTagApp {
     input_dir: String,
     output_dir: String,
@@ -242,21 +243,6 @@ struct PathTagApp {
     result: Option<RunResult>,
     results_open: bool,
     version: &'static str,
-}
-
-impl Default for PathTagApp {
-    fn default() -> Self {
-        Self {
-            input_dir: String::new(),
-            output_dir: String::new(),
-            validation_error: None,
-            preflight: None,
-            preflight_open: false,
-            result: None,
-            results_open: false,
-            version: "",
-        }
-    }
 }
 
 impl PathTagApp {
@@ -448,91 +434,91 @@ impl eframe::App for PathTagApp {
         });
 
         // Results window is independent of the main window.
-        if self.results_open {
-            if let Some(result) = &mut self.result {
-                egui::Window::new("Image Tagging Results")
-                    .open(&mut self.results_open)
-                    .default_size([820.0, 800.0])
-                    .min_size([480.0, 400.0])
-                    .resizable(true)
-                    .show(ctx, |ui| {
-                        ui.horizontal(|ui| match result.status {
-                            RunStatus::Running => {
-                                ui.spinner();
-                                ui.label("Processing...");
-                            }
-
-                            RunStatus::Success => {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(40, 180, 70),
-                                    egui::RichText::new("✓ Success").strong().size(18.0),
-                                );
-                            }
-
-                            RunStatus::Failed => {
-                                ui.colored_label(
-                                    egui::Color32::RED,
-                                    egui::RichText::new("✗ Failed").strong().size(18.0),
-                                );
-                            }
-                        });
-
-                        if let Some(error) = &result.error {
-                            ui.colored_label(egui::Color32::RED, error);
+        if self.results_open
+            && let Some(result) = &mut self.result
+        {
+            egui::Window::new("Image Tagging Results")
+                .open(&mut self.results_open)
+                .default_size([820.0, 800.0])
+                .min_size([480.0, 400.0])
+                .resizable(true)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| match result.status {
+                        RunStatus::Running => {
+                            ui.spinner();
+                            ui.label("Processing...");
                         }
 
-                        if let Some(changes) = &result.changes {
-                            if !changes.success_files.is_empty() {
-                                egui::CollapsingHeader::new(format!(
-                                    "Success files ({})",
-                                    changes.success_files.len(),
-                                ))
-                                .show(ui, |ui| {
-                                    Self::file_list(ui, &changes.success_files);
-                                });
-                            }
-
-                            if !changes.error_files.is_empty() {
-                                egui::CollapsingHeader::new(format!(
-                                    "Error files ({})",
-                                    changes.error_files.len(),
-                                ))
-                                .show(ui, |ui| {
-                                    Self::file_list(ui, &changes.error_files);
-                                });
-                            }
+                        RunStatus::Success => {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(40, 180, 70),
+                                egui::RichText::new("✓ Success").strong().size(18.0),
+                            );
                         }
 
-                        ui.separator();
-
-                        ui.horizontal(|ui| {
-                            ui.heading("Logs");
-                            ui.label(format!("{} entries", result.logs.len(),));
-
-                            if ui.button("Copy logs").clicked() {
-                                ctx.copy_text(result.logs.join("\n"));
-                            }
-
-                            if ui.button("Clear logs").clicked() {
-                                result.logs.clear();
-                            }
-                        });
-
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .stick_to_bottom(true)
-                            .show(ui, |ui| {
-                                for (index, line) in result.logs.iter().enumerate() {
-                                    ui.push_id(index, |ui| {
-                                        ui.add(
-                                            egui::Label::new(egui::RichText::new(line).monospace())
-                                                .selectable(true),
-                                        );
-                                    });
-                                }
-                            });
+                        RunStatus::Failed => {
+                            ui.colored_label(
+                                egui::Color32::RED,
+                                egui::RichText::new("✗ Failed").strong().size(18.0),
+                            );
+                        }
                     });
-            }
+
+                    if let Some(error) = &result.error {
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
+
+                    if let Some(changes) = &result.changes {
+                        if !changes.success_files.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Success files ({})",
+                                changes.success_files.len(),
+                            ))
+                            .show(ui, |ui| {
+                                Self::file_list(ui, &changes.success_files);
+                            });
+                        }
+
+                        if !changes.error_files.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Error files ({})",
+                                changes.error_files.len(),
+                            ))
+                            .show(ui, |ui| {
+                                Self::file_list(ui, &changes.error_files);
+                            });
+                        }
+                    }
+
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        ui.heading("Logs");
+                        ui.label(format!("{} entries", result.logs.len(),));
+
+                        if ui.button("Copy logs").clicked() {
+                            ctx.copy_text(result.logs.join("\n"));
+                        }
+
+                        if ui.button("Clear logs").clicked() {
+                            result.logs.clear();
+                        }
+                    });
+
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for (index, line) in result.logs.iter().enumerate() {
+                                ui.push_id(index, |ui| {
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(line).monospace())
+                                            .selectable(true),
+                                    );
+                                });
+                            }
+                        });
+                });
         }
 
         // Show the preflight confirmation dialog, if open.
