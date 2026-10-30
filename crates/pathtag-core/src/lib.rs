@@ -175,7 +175,10 @@ pub fn tag_dir_images(
                 relative_path.canonicalize().unwrap().display()
             )
         })?;
-        let new_tags = dir_path_to_tags(new_file_parent_dir).with_context(|| {
+        let relative_path_parent = relative_path.parent().with_context(|| {
+            format!("Failed to get parent of relative path {:?}", relative_path)
+        })?;
+        let new_tags = dir_path_to_tags(relative_path_parent).with_context(|| {
             format!(
                 "Failed to get tags for directory {}",
                 new_file_parent_dir.display()
