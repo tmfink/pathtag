@@ -1,6 +1,9 @@
 [workspace]
 members = ["crates/*"]
-default-members = ["crates/cli"]
+default-members = [
+    "crates/cli",
+    "crates/gui",
+]
 resolver = "3"
 
 [workspace.dependencies]
