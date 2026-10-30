@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use eframe::egui;
 use pathtag_core::{ChangeInfo, tag_dir_images};
 use tracing::{Event, Subscriber};
@@ -241,6 +241,7 @@ struct PathTagApp {
 
     result: Option<RunResult>,
     results_open: bool,
+    version: &'static str,
 }
 
 impl Default for PathTagApp {
@@ -253,6 +254,7 @@ impl Default for PathTagApp {
             preflight_open: false,
             result: None,
             results_open: false,
+            version: "",
         }
     }
 }
@@ -405,6 +407,12 @@ impl eframe::App for PathTagApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            egui::Area::new(egui::Id::new("top_right_label"))
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-10.0, -10.0))
+                .show(ctx, |ui| {
+                    ui.weak(format!("Version: {}", self.version));
+                });
+
             ui.heading("PathTag");
             ui.label("Add metadata tags to images in a directory.");
 
@@ -688,8 +696,18 @@ impl PathTagApp {
     }
 }
 
+fn version_string() -> String {
+    if let Some(git_version) = pathtag_core::GIT_VERSION {
+        format!("{} (git {})", env!("CARGO_PKG_VERSION"), git_version)
+    } else {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+}
+
 fn main() -> eframe::Result {
-    let args = Args::parse();
+    let version: &str = version_string().leak();
+    let matches = Args::command().version(version).get_matches();
+    let args = Args::from_arg_matches(&matches).unwrap();
 
     let input_dir = args
         .input_dir
@@ -728,6 +746,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(PathTagApp {
                 input_dir,
                 output_dir,
+                version,
                 ..PathTagApp::default()
             }))
         }),

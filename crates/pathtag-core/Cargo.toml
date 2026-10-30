@@ -3,6 +3,10 @@ name = "pathtag-core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Internal, do not use
+_git-version = []
+
 [dependencies]
 anyhow = { workspace = true }
 rexiv2 = "0.10.0"

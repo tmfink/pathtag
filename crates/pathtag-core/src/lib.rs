@@ -15,6 +15,16 @@ pub struct ChangeInfo {
     pub error_files: BTreeSet<String>,
 }
 
+#[doc(hidden)]
+pub const GIT_VERSION: Option<&str> = cfg_select! {
+    feature = "_git-version" => {
+        Some(env!("GIT_VERSION"))
+    }
+    _ => {
+        None
+    }
+};
+
 fn sanity_check_inout_paths(input_dir: &Path, output_dir: &Path) -> anyhow::Result<()> {
     if !input_dir.is_dir() {
         anyhow::bail!("Input dir must be a directory");

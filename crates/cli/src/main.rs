@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing::{info, level_filters::LevelFilter};
 
 /// Apply EXIF keyword tags based on directory structure
 ///
 /// Makes a copy of the input dir to the output dir with the EXIF tags added
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(about, long_about = None)]
 struct Args {
     /// Input directory with images
     #[arg(short, long)]
@@ -26,6 +26,14 @@ struct Args {
     verbose: u8,
 }
 
+fn version_string() -> String {
+    if let Some(git_version) = pathtag_core::GIT_VERSION {
+        format!("{} (git {})", env!("CARGO_PKG_VERSION"), git_version)
+    } else {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+}
+
 fn set_logging(verbosity: u8) {
     let levels = [
         LevelFilter::OFF,
@@ -42,7 +50,10 @@ fn set_logging(verbosity: u8) {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let version: &str = version_string().leak();
+    let matches = Args::command().version(version).get_matches();
+    let args = Args::from_arg_matches(&matches).unwrap();
+
     set_logging(args.verbose);
     info!("Args: {args:?}");
 
